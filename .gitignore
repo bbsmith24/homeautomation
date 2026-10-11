@@ -1,0 +1,10 @@
+# only these projects are tracked - older versions, zips and other folders here stay local
+/*
+!/.gitignore
+!/README.md
+!/GarageDoor_V4/
+!/StairLights_V5/
+!/SumpMonitor_V5/
+
+# local credentials (each project's include/secrets.h - see include/secrets.example.h)
+secrets.h
