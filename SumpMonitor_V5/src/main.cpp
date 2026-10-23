@@ -135,10 +135,12 @@ void setup()
     Serial.printf("start WiFi %s %s\n",WIFI_SSID.c_str(), WIFI_PASSWORD.c_str());
   #endif
   WiFi.begin(WIFI_SSID.c_str(), WIFI_PASSWORD.c_str());
+  // mains powered: keep the radio awake so ARP/broadcasts from the mesh aren't missed
+  WiFi.setSleep(false);
   // set up wifi in either STATION (if WiFi connects) or AP (no wifi connection)
   WiFi_Setup();
   // set up MQTT if in STATION mode
-  randomSeed(analogRead(0));
+  randomSeed(esp_random());   // hardware RNG; analogRead(0) is ADC2, unusable while WiFi is on
   sprintf(tmpStr, "%s%c%c%c%c", mqttClientID.c_str(), (char)random(65, 90), (char)random(65, 90), (char)random(65, 90), (char)random(65, 90));
   mqttClientID = tmpStr;
   #ifdef DEBUG_VERBOSE
@@ -417,13 +419,26 @@ bool MQTT_Setup()
       mqttFailStartMillis = millis();
     }
     mqttConnectAttempts++;
-    sprintf(tmpStr, "No MQTT (%d)", mqttConnectAttempts);
+    // always report why the broker refused (PubSubClient state codes)
+    int mqttState = MQTT_client.state();
+    const char *reason = mqttState == MQTT_CONNECTION_TIMEOUT      ? "timeout" :
+                         mqttState == MQTT_CONNECTION_LOST         ? "conn lost" :
+                         mqttState == MQTT_CONNECT_FAILED          ? "no TCP conn" :
+                         mqttState == MQTT_CONNECT_BAD_PROTOCOL    ? "bad protocol" :
+                         mqttState == MQTT_CONNECT_BAD_CLIENT_ID   ? "bad client ID" :
+                         mqttState == MQTT_CONNECT_UNAVAILABLE     ? "unavailable" :
+                         mqttState == MQTT_CONNECT_BAD_CREDENTIALS ? "bad user/pass" :
+                         mqttState == MQTT_CONNECT_UNAUTHORIZED    ? "unauthorized" : "unknown";
+    sprintf(tmpStr, "No MQTT (%d) %s", mqttConnectAttempts, reason);
     oledString[1] = tmpStr;
     RefreshOLED(1);
-    #ifdef DEBUG_EXTRA_VERBOSE
-      Serial.println();
-      Serial.printf("%s state %d\n", tmpStr, MQTT_client.state());
-    #endif
+    Serial.printf("[MQTT] %s:%d as %s, user '%s' (password %d chars): state %d %s\n",
+                  mqtt_server.c_str(), mqtt_port, mqttClientID.c_str(), mqtt_user.c_str(),
+                  mqtt_password.length(), mqttState, reason);
+    Serial.printf("[MQTT] WiFi '%s' status %d (3 = connected), IP %s, mask %s, gateway %s, RSSI %d, MAC %s, DHCP hostname '%s' (setting '%s')\n",
+                  WiFi.SSID().c_str(), WiFi.status(), WiFi.localIP().toString().c_str(), WiFi.subnetMask().toString().c_str(),
+                  WiFi.gatewayIP().toString().c_str(), WiFi.RSSI(), WiFi.macAddress().c_str(),
+                  WiFi.getHostname(), WIFI_HOSTNAME.c_str());
     mqtt_connected = false;
     // can't reach the broker (wrong server/user/password, or broker down) - fall back to
     // AP mode so the settings can be checked on the setup page. With saved WiFi credentials
@@ -506,10 +521,48 @@ void LoadSetting(const char * path, String &value)
     Serial.printf("[Settings] %s loaded (%d chars)\n", path, value.length());
   #endif
 }
+// Saved settings belong to the firmware that wrote them. If this controller last ran a
+// different project, wipe its files so this firmware starts from its own defaults
+// (hostname/AP name, WiFi, MQTT). No marker = settings from older firmware: keep them.
+#define PROJECT_ID   "SumpMonitor_V5"
+#define projectPath  "/project.txt"
+void CheckProjectOwner()
+{
+  String owner = LittleFS.exists(projectPath) ? LITTLEFS_ReadFile(LittleFS, projectPath) : String("");
+  owner.trim();
+  if((owner.length() > 0) && (owner != PROJECT_ID))
+  {
+    #ifdef DEBUG_VERBOSE
+      Serial.printf("[Settings] saved by %s, wiping for %s\n", owner.c_str(), PROJECT_ID);
+    #endif
+    String names[32];
+    int count = 0;
+    File root = LittleFS.open("/");
+    for(File f = root.openNextFile(); f && (count < 32); f = root.openNextFile())
+    {
+      if(!f.isDirectory())
+      {
+        String n = f.name();
+        names[count++] = n.startsWith("/") ? n : "/" + n;
+      }
+      f.close();
+    }
+    root.close();
+    for(int idx = 0; idx < count; idx++)
+    {
+      LittleFS.remove(names[idx]);
+    }
+  }
+  if(owner != PROJECT_ID)
+  {
+    LITTLEFS_WriteFile(LittleFS, projectPath, PROJECT_ID);
+  }
+}
 // load wifi credentials from LITTLEFS
 //
 void LoadCredentials()
 {
+  CheckProjectOwner();
   // settings never saved from the setup page keep their DeviceSpecific.h defaults
   LoadSetting(ssidPath, WIFI_SSID);
   LoadSetting(passPath, WIFI_PASSWORD);
@@ -580,6 +633,8 @@ void WriteHTML()
   //LITTLEFS_AppendFile(LittleFS, pagePath, "    <h1>Sump Monitor Credentials</h1>");
   sprintf(tmpStr, "    <h1>%s Credentials</h1>", WIFI_HOSTNAME.c_str());
   LITTLEFS_AppendFile(LittleFS, pagePath, tmpStr);
+  sprintf(tmpStr, "    <p>Version %s, built %s %s</p>", FW_VERSION, __DATE__, __TIME__);
+  LITTLEFS_AppendFile(LittleFS, pagePath, tmpStr);
   LITTLEFS_AppendFile(LittleFS, pagePath, "  </div>");
   LITTLEFS_AppendFile(LittleFS, pagePath, "  <div class=\"content\">");
   LITTLEFS_AppendFile(LittleFS, pagePath, "    <div class=\"card-grid\">");
@@ -593,7 +648,7 @@ void WriteHTML()
 
   LITTLEFS_AppendFile(LittleFS, pagePath, "            <label for=\"pass\">Password</label>");
   // passwords are never written into the page - blank keeps the current one
-  strcpy(tmpStr, "            <input type=\"password\" id =\"pass\" name=\"pass\" placeholder=\"leave blank to keep current\"><br>");
+  strcpy(tmpStr, "            <input type=\"text\" id =\"pass\" name=\"pass\" placeholder=\"leave blank to keep current\"><br>");
   LITTLEFS_AppendFile(LittleFS, pagePath, tmpStr);
 
   LITTLEFS_AppendFile(LittleFS, pagePath, "            <label for=\"clientname\">Host Name</label>");
@@ -615,7 +670,7 @@ void WriteHTML()
   LITTLEFS_AppendFile(LittleFS, pagePath, tmpStr);
 
   LITTLEFS_AppendFile(LittleFS, pagePath, "            <label for=\"mqtt_password\">MQTT password</label>");
-  strcpy(tmpStr, "            <input type=\"password\" id =\"mqtt_password\" name=\"mqtt_password\" placeholder=\"leave blank to keep current\"><br>");
+  strcpy(tmpStr, "            <input type=\"text\" id =\"mqtt_password\" name=\"mqtt_password\" placeholder=\"leave blank to keep current\"><br>");
   LITTLEFS_AppendFile(LittleFS, pagePath, tmpStr);
 
   LITTLEFS_AppendFile(LittleFS, pagePath, "			<hr/>");

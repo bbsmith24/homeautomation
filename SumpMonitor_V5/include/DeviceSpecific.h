@@ -13,6 +13,8 @@
   #error "include/secrets.h is missing - copy include/secrets.example.h to include/secrets.h and fill in your WiFi/MQTT settings"
 #endif
 // WiFi
+// firmware version shown on the setup page - bump when releasing
+#define FW_VERSION "5.1.0"
 String WIFI_HOSTNAME = "SUMP-MONITOR";
 String WIFI_SSID     = SECRET_WIFI_SSID;
 String WIFI_PASSWORD = SECRET_WIFI_PASSWORD;
