@@ -19,3 +19,70 @@ All three share the same MQTT_Minimal framework (`include/MQTT_Minimal.h` and th
 
 1. Copy `include/secrets.example.h` to `include/secrets.h` in the project and fill in your WiFi and MQTT settings. `secrets.h` is git-ignored.
 2. Open the project folder in VS Code with the PlatformIO extension, or run `pio run -d <project>`; `pio run -d <project> -t upload` to flash.
+
+## MQTT broker: Raspberry Pi (openHABian)
+
+The broker is Mosquitto on the openHABian Raspberry Pi, which also runs OpenHAB.
+
+| Setting | Value |
+|---|---|
+| Broker address | `192.168.4.45`, port `1883` |
+| Pi network interface | `wlan0` (Wi-Fi), static IP managed by NetworkManager |
+| Home network (eero) | `192.168.4.0/22`, i.e. `192.168.4.0` to `192.168.7.255`, mask `255.255.252.0` |
+| Gateway / DNS | `192.168.4.1` |
+
+MQTT user and password are in each project's `include/secrets.h` (not committed). They can also be changed on a device's setup page.
+
+### The Pi's static IP must use /22, not /24
+
+eero hands out addresses across the whole `192.168.4.0/22` range, so devices can get `192.168.5.x`, `6.x` or `7.x` addresses. If the Pi is set to `192.168.4.45/24`, it treats only `192.168.4.x` as local. It never replies to anything on 5.x–7.x, so those devices can't reach the broker or the OpenHAB UI.
+
+The symptoms:
+- Some devices can reach `192.168.4.45` and others can't. The ones that work all have `192.168.4.x` addresses.
+- An ESP32 controller's serial output shows `[MQTT] ... state -2 no TCP conn` even though the server, port, user and password are correct.
+
+**Check the Pi's address and mask:**
+```bash
+ip -4 addr show wlan0
+```
+It must show `inet 192.168.4.45/22 brd 192.168.7.255`. `/24` is wrong.
+
+**Fix it (NetworkManager).** Find the connection name for `wlan0`. It's usually the SSID or `preconfigured`:
+```bash
+nmcli -f NAME,DEVICE con show --active
+```
+Then set the /22 mask and re-apply it as one command, so it completes even if SSH drops while Wi-Fi reconnects:
+```bash
+sudo nmcli con mod "<name>" ipv4.addresses 192.168.4.45/22 ipv4.gateway 192.168.4.1 && sudo nmcli con up "<name>"
+```
+SSH freezes for a few seconds while Wi-Fi reconnects. If it doesn't come back within a minute, power-cycle the Pi; the setting is saved.
+
+On older images that use dhcpcd instead, edit `/etc/dhcpcd.conf`, change `static ip_address=192.168.4.45/24` to `/22`, and reboot.
+
+**It persists across reboots.** `nmcli con mod` writes the connection profile to `/etc/NetworkManager/system-connections/<name>.nmconnection`. To check it:
+```bash
+sudo grep -A4 "^\[ipv4\]" /etc/NetworkManager/system-connections/*.nmconnection
+```
+It should show `address1=192.168.4.45/22,192.168.4.1`. Re-running the network setup in `openhabian-config` can rewrite this profile, so check the mask again afterwards.
+
+**An alternative to a static IP:** set the Pi to DHCP and add an IP reservation for `192.168.4.45` in the eero app. The mask then always matches what eero hands out.
+
+### Testing the broker from a PC
+- **TCP reachability (PowerShell):** `Test-NetConnection 192.168.4.45 -Port 1883` should report `TcpTestSucceeded : True`.
+- **Broker log on the Pi:** `sudo tail -f /var/log/mosquitto/mosquitto.log` shows connections and refusals. If a device's attempts never appear, it isn't reaching the Pi at all, a network problem rather than an MQTT one.
+
+### Controller diagnostics
+When an MQTT connection fails, the controllers print two lines on serial at 115200 baud, and show the reason on the OLED:
+```
+[MQTT] 192.168.4.45:1883 as MQTTGARAGEDOOR_ABCD, user '...' (password 10 chars): state -2 no TCP conn
+[MQTT] WiFi '<ssid>' status 3 (3 = connected), IP 192.168.7.174, mask 255.255.252.0, gateway 192.168.4.1, RSSI -42, MAC ..., DHCP hostname 'GARAGE-DOOR' (setting 'GARAGE-DOOR')
+```
+
+| State | Meaning |
+|---|---|
+| `-2 no TCP conn` | Couldn't reach the broker: network, mask or firewall |
+| `-4 timeout` | Reached something but got no MQTT reply (wrong port?) |
+| `4 bad user/pass` | The broker rejected the login |
+| `5 unauthorized` | Login OK but the broker's access rules refused this client |
+
+Giving each controller an eero IP reservation keeps it at a known address. eero names a device after the first hostname it sees for that MAC and doesn't update it, so rename the device in the eero app if you reuse a controller for another project.
