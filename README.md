@@ -67,6 +67,36 @@ It should show `address1=192.168.4.45/22,192.168.4.1`. Re-running the network se
 
 **An alternative to a static IP:** set the Pi to DHCP and add an IP reservation for `192.168.4.45` in the eero app. The mask then always matches what eero hands out.
 
+### Moving to a different router or Pi address
+
+The values above (`192.168.4.45`, `/22`, gateway `192.168.4.1`) only fit this eero network. On any router, a static IP on the Pi must match three things:
+
+| Setting | Must be |
+|---|---|
+| IP address | Inside the router's subnet, and outside its DHCP pool (or reserved), so it isn't handed to another device |
+| Mask | The same mask the router gives its DHCP clients. Most home routers use `/24` (`255.255.255.0`); eero uses `/22` |
+| Gateway and DNS | The router's own IP |
+
+Getting any of these wrong gives either the "some devices can't reach it" problem above, or no connection at all.
+
+**Static IP on a new router:**
+1. Find the router's network. On a Windows PC connected to it, run `ipconfig` and note the IPv4 address, subnet mask and default gateway. For example, `192.168.1.23`, `255.255.255.0`, `192.168.1.1` means the network is `192.168.1.0/24`.
+2. Pick a free address in that range, outside the router's DHCP pool, e.g. `192.168.1.45`.
+3. Set it on the Pi:
+   ```bash
+   sudo nmcli con mod "<name>" ipv4.method manual ipv4.addresses 192.168.1.45/24 ipv4.gateway 192.168.1.1 ipv4.dns 192.168.1.1 && sudo nmcli con up "<name>"
+   ```
+
+**The more portable option is DHCP plus a router reservation.** Put the Pi on DHCP so the router always supplies the right mask, gateway and DNS:
+```bash
+sudo nmcli con mod "<name>" ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns "" && sudo nmcli con up "<name>"
+```
+Then reserve a fixed address for the Pi's MAC address in the router's settings. Nearly every router supports reservations, so this works anywhere without working out masks by hand.
+
+**If the Pi's address changes,** also update the MQTT server address:
+- on each controller's setup page, or in `secrets.h` before reflashing
+- anywhere OpenHAB refers to the broker by IP
+
 ### Testing the broker from a PC
 - **TCP reachability (PowerShell):** `Test-NetConnection 192.168.4.45 -Port 1883` should report `TcpTestSucceeded : True`.
 - **Broker log on the Pi:** `sudo tail -f /var/log/mosquitto/mosquitto.log` shows connections and refusals. If a device's attempts never appear, it isn't reaching the Pi at all, a network problem rather than an MQTT one.
