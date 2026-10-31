@@ -28,7 +28,8 @@ IPAddress apSubnet(255, 255, 255, 0);
 String mqttClientID = "MQTTGARAGEDOOR_";   // local name, must be unique on MQTT server so append a random string at the end
 String mqttDeviceName = "GARAGEDOOR";
 #define MQTT_CONNECT_DELAY 30000
-#define MQTT_REPORT_INTERVAL_MS 2000
+#define MQTT_REPORT_INTERVAL_MS 2000       // minimum time between checking sensors and publishing changes to MQTT server
+#define MQTT_TIMEREPORT_INTERVAL_MS 60000  // minimum time between publishing time-only updates to MQTT server
 String mqtt_server = SECRET_MQTT_SERVER;
 String mqtt_user = SECRET_MQTT_USER;
 String mqtt_password = SECRET_MQTT_PASSWORD;

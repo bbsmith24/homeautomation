@@ -343,9 +343,13 @@ void loop()
       // update local time
       UpdateLocalTime();
       // publish time only
-      published_payload[PUBLISH_TIME] = localTimeStr;
-      MQTT_Publish(PUBLISH_TIME);
-      MQTT_Publish(BOOT_TIME);    
+      if(millis() - lastTimeMillis > MQTT_TIMEREPORT_INTERVAL_MS)
+      {
+        lastTimeMillis = millis();
+        published_payload[PUBLISH_TIME] = localTimeStr;
+        MQTT_Publish(PUBLISH_TIME);
+        MQTT_Publish(BOOT_TIME);
+      }
     }
   }
   if(lightingChange)

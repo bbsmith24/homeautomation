@@ -106,8 +106,9 @@ String oledString[4] = {"Line 1", "Line 2", "Line 3", "Line 4"};
 #define SCREEN_ADDRESS 0x3C ///< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
 Adafruit_SSD1306 oledDisplay(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-// temporary string, last millis check
+// temporary string, last millis checks
 unsigned long lastMillis = 0;
+unsigned long lastTimeMillis = 0;
 char tmpStr[256];
 
 // Elegant OTA

@@ -249,13 +249,18 @@ void loop()
       {
         published_payload[PUBLISH_TIME] = localTimeStr;
         MQTT_Publish();
+        lastTimeMillis = millis();
       }
       // publish time only
       else
       {
-        // publish time
-        published_payload[PUBLISH_TIME] = localTimeStr;
-        MQTT_Publish(PUBLISH_TIME);
+        // publish time only
+        if(millis() - lastTimeMillis > MQTT_TIMEREPORT_INTERVAL_MS)
+        {
+          lastTimeMillis = millis();
+          published_payload[PUBLISH_TIME] = localTimeStr;
+          MQTT_Publish(PUBLISH_TIME);
+        }
       }
     }
   }
