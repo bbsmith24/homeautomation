@@ -25,6 +25,9 @@
 //#include <ESP32Time.h>          // https://github.com/fbiego/ESP32Time
 #include "MQTT_Minimal.h"       // common defines for the MQTT_Minial start point
 #include "DeviceSpecific.h"
+#ifdef LOW_POWER
+  #include "esp_pm.h"           // automatic light sleep - needs CONFIG_PM_ENABLE (see sdkconfig.defaults)
+#endif
 // forward declarations (the Arduino IDE generated these automatically for .ino files)
 void WiFi_Setup();
 void StartAP();
@@ -48,6 +51,10 @@ void RefreshOLED(int fontSize);
 void onOTAStart();
 void onOTAProgress(size_t current, size_t final);
 void onOTAEnd(bool success);
+void LowPower_Setup();
+void LowPower_Hold();
+void LowPower_Release();
+void LowPower_Idle();
 void SetupSensors();
 bool ReadSensors();
 
@@ -112,6 +119,9 @@ void setup()
   // MQTT client setup
   MQTT_client.setServer(mqtt_server.c_str(), mqtt_port);
   MQTT_client.setCallback(MQTT_Callback);
+  #ifdef MQTT_KEEPALIVE_S
+    MQTT_client.setKeepAlive(MQTT_KEEPALIVE_S);
+  #endif
 
   if(strlen(WIFI_HOSTNAME.c_str()) == 0)
   {
@@ -134,9 +144,15 @@ void setup()
   #ifdef DEBUG_VERBOSE
     Serial.printf("start WiFi %s %s\n",WIFI_SSID.c_str(), WIFI_PASSWORD.c_str());
   #endif
+  LowPower_Setup();
   WiFi.begin(WIFI_SSID.c_str(), WIFI_PASSWORD.c_str());
-  // mains powered: keep the radio awake so ARP/broadcasts from the mesh aren't missed
-  WiFi.setSleep(false);
+  #ifdef LOW_POWER
+    // battery powered: the radio dozes between AP beacons
+    WiFi.setSleep(LOW_POWER_WIFI_PS);
+  #else
+    // mains powered: keep the radio awake so ARP/broadcasts from the mesh aren't missed
+    WiFi.setSleep(false);
+  #endif
   // set up wifi in either STATION (if WiFi connects) or AP (no wifi connection)
   WiFi_Setup();
   // set up MQTT if in STATION mode
@@ -218,6 +234,8 @@ void setup()
 //
 void loop()
 {
+  // battery devices: let the CPU light sleep for a moment each pass
+  LowPower_Idle();
   // settings submitted from the setup page - apply and save them (restarts) once the response has gone out
   if(settingsPending && (millis() - settingsPendingMillis > 1000))
   {
@@ -1084,6 +1102,8 @@ void RefreshOLED(int fontSize)
 void onOTAStart() {
   // Log when OTA has started
   Serial.println("OTA update started!");
+  // stay awake for the upload
+  LowPower_Hold();
   // <Add your own code here>
 }
 
@@ -1102,10 +1122,61 @@ void onOTAEnd(bool success) {
   } else {
     Serial.println("There was an error during OTA update!");
   }
+  LowPower_Release();
   // <Add your own code here>
 }
 // ================================ end ElegantOTA support functions ================================
-// ================================ begin device specific functions ================================
+// ================================ begin low power functions ================================
+// Battery devices define LOW_POWER in the device header: the CPU light sleeps whenever every
+// task is idle and WiFi dozes between AP beacons, staying associated. This needs Arduino built
+// as an ESP-IDF component with power management on (see SlidingDoorLock's platformio.ini and
+// sdkconfig.defaults). Mains powered devices leave LOW_POWER undefined and these do nothing.
+#ifdef LOW_POWER
+esp_pm_lock_handle_t awakeLock = NULL;
+#endif
+void LowPower_Setup()
+{
+  #ifdef LOW_POWER
+    esp_pm_config_esp32_t pmConfig = {};
+    pmConfig.max_freq_mhz = LOW_POWER_MAX_MHZ;
+    pmConfig.min_freq_mhz = LOW_POWER_MIN_MHZ;
+    pmConfig.light_sleep_enable = true;
+    esp_err_t err = esp_pm_configure(&pmConfig);
+    if(err != ESP_OK)
+    {
+      Serial.printf("[Power] light sleep not available (%s)\n", esp_err_to_name(err));
+    }
+    // holding the APB at full speed also blocks light sleep - PWM and OTA need both
+    esp_pm_lock_create(ESP_PM_APB_FREQ_MAX, 0, "awake", &awakeLock);
+  #endif
+}
+// stay fully awake until LowPower_Release() - calls nest
+void LowPower_Hold()
+{
+  #ifdef LOW_POWER
+    if(awakeLock != NULL)
+    {
+      esp_pm_lock_acquire(awakeLock);
+    }
+  #endif
+}
+void LowPower_Release()
+{
+  #ifdef LOW_POWER
+    if(awakeLock != NULL)
+    {
+      esp_pm_lock_release(awakeLock);
+    }
+  #endif
+}
+// called at the top of loop() - blocking here lets the idle task put the CPU to sleep
+void LowPower_Idle()
+{
+  #ifdef LOW_POWER
+    delay(LOW_POWER_LOOP_DELAY_MS);
+  #endif
+}
+// ================================ end low power functions ================================// ================================ begin device specific functions ================================
 void SetupSensors()
 {
   #ifdef DEBUG_VERBOSE

@@ -7,8 +7,10 @@ ESP32 firmware for my MQTT home-automation devices, built with PlatformIO in VS 
 | `GarageDoor_V4` | DFRobot FireBeetle ESP32 (`firebeetle32`) | Garage door opener button and open/closed sensing |
 | `StairLights_V5` | ESP32 DOIT DevKit V1 | WS2812 stair lighting (colour, brightness, pattern over MQTT) |
 | `SumpMonitor_V5` | ESP32 DOIT DevKit V1 | Sump pit float switches, pump cycle times |
+| `SlidingDoorLock` | DFRobot FireBeetle ESP32 (`firebeetle32`) | Battery powered (4 AA) servo lock: LOCK/UNLOCK over MQTT, battery voltage |
+| `MQTT_Minimal` | ESP32 DOIT DevKit V1 | Starting point for new devices: the framework with no sensors |
 
-All three share the same MQTT_Minimal framework (`include/MQTT_Minimal.h` and the WiFi/MQTT/setup code in `src/main.cpp`):
+All of them share the same MQTT_Minimal framework (`include/MQTT_Minimal.h` and the WiFi/MQTT/setup code in `src/main.cpp`):
 
 - Connects to WiFi and an MQTT broker; reports to OpenHAB over MQTT.
 - If WiFi fails for 60 s or MQTT for 2 min, starts a setup access point named after the device's hostname at `192.168.42.1`. Joining it opens the setup page automatically (captive portal).
@@ -19,6 +21,12 @@ All three share the same MQTT_Minimal framework (`include/MQTT_Minimal.h` and th
 
 1. Copy `include/secrets.example.h` to `include/secrets.h` in the project and fill in your WiFi and MQTT settings. `secrets.h` is git-ignored.
 2. Open the project folder in VS Code with the PlatformIO extension, or run `pio run -d <project>`; `pio run -d <project> -t upload` to flash.
+
+### Low power (SlidingDoorLock)
+
+`SlidingDoorLock` defines `LOW_POWER`: the CPU light sleeps whenever it is idle and WiFi dozes between beacons while staying connected, so commands still arrive within about a second. The prebuilt Arduino core has power management turned off, so this project builds Arduino as an ESP-IDF component (`framework = arduino, espidf`) with the settings in `sdkconfig.defaults`. `components/esp_littlefs` (a git submodule - clone with `--recursive`, or run `git submodule update --init --recursive`) supplies LittleFS. The first build compiles ESP-IDF and takes a few minutes.
+
+ESP-IDF won't build from a path containing spaces, so keep this repo in a folder without any (e.g. `E:\GitHub\HomeAutomation`).
 
 ## MQTT broker: Raspberry Pi (openHABian)
 
