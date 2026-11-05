@@ -30,6 +30,7 @@
 #include "SlidingDoorLock.h"
 #ifdef LOW_POWER
   #include "esp_pm.h"           // automatic light sleep - needs CONFIG_PM_ENABLE (see sdkconfig.defaults)
+  #include "driver/uart.h"      // serial clock source for light sleep
 #endif
 // forward declarations (the Arduino IDE generated these automatically for .ino files)
 void WiFi_Setup();
@@ -1245,6 +1246,17 @@ void LowPower_Setup()
     }
     // holding the APB at full speed also blocks light sleep - PWM and OTA need both
     esp_pm_lock_create(ESP_PM_APB_FREQ_MAX, 0, "awake", &awakeLock);
+    // the Arduino core clocks Serial from the APB, which drops to LOW_POWER_MIN_MHZ whenever
+    // nothing holds it - bytes sent across a change come out garbled. REF_TICK is a fixed 1 MHz
+    Serial.flush();
+    uart_config_t uartConfig = {};
+    uartConfig.baud_rate = 115200;
+    uartConfig.data_bits = UART_DATA_8_BITS;
+    uartConfig.parity = UART_PARITY_DISABLE;
+    uartConfig.stop_bits = UART_STOP_BITS_1;
+    uartConfig.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+    uartConfig.source_clk = UART_SCLK_REF_TICK;
+    uart_param_config(UART_NUM_0, &uartConfig);
   #endif
 }
 // stay fully awake until LowPower_Release() - calls nest

@@ -64,9 +64,9 @@ String published_payload[MAX_PUBLISH];
 #define MQTT_STATUS_LED    0   // on when MQTT is connected
 #define EXT_RESET          2   // low to reset (labeled SDA on Thing)
 #define WIFI_STATUS_LED    5   // on when WIFI is connected (also built in LED)
-#define OPENER_BUTTON_PIN 12   // trigger the transistor to close the door switch connection
-#define CLOSE_DETECT_PIN  13   // state of the door closed switch
-#define OPEN_DETECT_PIN   14   // state of the door open switch
+#define OPENER_BUTTON_PIN 27 /*12*/   // trigger the transistor to close the door switch connection
+#define CLOSE_DETECT_PIN  25 /*14*/   // state of the door closed switch
+#define OPEN_DETECT_PIN   26 /*19*/   // state of the door open switch
 #define VBATT_PIN  A0
 String strDoorValue;
 bool neverUpdated = true;
