@@ -8,6 +8,7 @@
 !/SumpMonitor_V5/
 !/SlidingDoorLock/
 !/MQTT_Minimal/
+!/ChristmasLights/
 
 # local credentials (each project's include/secrets.h - see include/secrets.example.h)
 secrets.h
