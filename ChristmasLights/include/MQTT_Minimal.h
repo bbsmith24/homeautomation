@@ -7,7 +7,7 @@
   DMQTT_Minimal.h - core functionality
 */
 // debugging
-#define DEBUG_VERBOSE
+//#define DEBUG_VERBOSE
 //#define DEBUG_EXTRA_VERBOSE
 //#define USE_DISPLAY 
 // wifi

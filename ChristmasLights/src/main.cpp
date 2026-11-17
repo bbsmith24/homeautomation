@@ -62,23 +62,55 @@ void LowPower_Release();
 void LowPower_Idle();
 void SetupSensors();
 bool ReadSensors();
+bool ParseSX1509Address(String value, byte &address);
+void LoadSX1509Addresses();
+void SaveSX1509Addresses();
 // handle subscribed messages
 void MQTT_Callback(char* topic, byte* payload, unsigned int length) 
 { 
+  #ifdef DEBUG_VERBOSE
+    Serial.print("MQTT_Callback ");
+    Serial.println("=============");
+  #endif
   String topicStr;
   String payloadStr[3];
   topicStr = topic;
-  for(int deviceIdx = 0; deviceIdx<3; deviceIdx++)
+  // payload is 3 16-bit binary strings separated by spaces, e.g. "1010101010101010 0000111100001111 1111000011110000"
+  // payload is not null terminated - only read 'length' bytes. Runs of spaces count as one separator,
+  // extra fields are ignored, each field is capped at 16 characters
+  int fieldIdx = 0;
+  bool inField = false;
+  for (unsigned int i = 0; i < length; i++)
   {
-    for(int payloadIdx = (deviceIdx * 8); (deviceIdx * 8) + 8; payloadIdx++)
+    char c = (char)payload[i];
+    if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
     {
-      payloadStr[deviceIdx] += (char)payload[payloadIdx];
+      if (inField)
+      {
+        fieldIdx++;
+        inField = false;
+        if (fieldIdx >= 3)
+        {
+          break;
+        }
+      }
+      continue;
     }
-    Serial.println(payloadStr[deviceIdx]);
+    inField = true;
+    if (payloadStr[fieldIdx].length() < 16)
+    {
+      payloadStr[fieldIdx] += c;
+    }
   }
-  for (int i = 0; i < length; i++) 
+  #ifdef DEBUG_VERBOSE
+    for (int i = 0; i < 3; i++)
+    {
+      Serial.printf("segment %d: '%s'\n", i, payloadStr[i].c_str());
+    }
+  #endif
+  if (messageSegment < 0 || messageSegment >= 3)
   {
-    payloadStr[messageSegment] += (char)payload[i];
+    return;
   }
   #ifdef DEBUG_VERBOSE
     Serial.print("MQTT_Callback ");
@@ -89,21 +121,38 @@ void MQTT_Callback(char* topic, byte* payload, unsigned int length)
   UpdateLights(payloadStr[messageSegment]);
 }
 //
+// set all 16 outputs from a 16 character '0'/'1' string - first character is SX1509_LED_PIN[0][0]
+// outputs are active low ('1' = on = LOW). Builds the whole port value and writes RegDataB/RegDataA
+// in one I2C transaction - io.digitalWrite() costs 3 I2C transactions per pin (read direction,
+// read data, write data), 48 per update. All 16 pins are outputs (SetupSensors) so writing the
+// data registers directly is safe. Missing characters (short string) are off
 //
-//  
 void UpdateLights(String payloadStr)
 {
-  for(int idx = 0; idx < 16; idx++)
+  if(!sx1509Ok[0])
+  {
+    return;   // board didn't answer at its address - see the setup page
+  }
+  uint16_t portData = 0xFFFF;   // all off
+  for(int idx = 0; idx < DEFINED_OUTPUTS; idx++)
   {
     if(payloadStr.charAt(idx) == '1')
     {
-      io[0].digitalWrite(SX1509_LED_PIN[0][idx], LOW);
-    }
-    else
-    {
-      io[0].digitalWrite(SX1509_LED_PIN[0][idx], HIGH);
+      portData &= ~(1u << SX1509_LED_PIN[0][idx]);
     }
   }
+  Wire.beginTransmission(SX1509_ADDRESS[0]);
+  Wire.write(SX1509_REG_DATA_B);       // pins 15-8, the SX1509 auto-increments to RegDataA (pins 7-0)
+  Wire.write((uint8_t)(portData >> 8));
+  Wire.write((uint8_t)(portData & 0xFF));
+  byte err = Wire.endTransmission();
+  #ifdef DEBUG_VERBOSE
+    if(err != 0)
+    {
+      Serial.printf("[Lights] SX1509 write failed, I2C error %d\n", err);
+    }
+  #endif
+  (void)err;
 }
 //
 // main setup
@@ -118,8 +167,6 @@ void setup()
     Serial.println("MQTT MINIMAL");
     Serial.println("============");
   #endif
-
-  SetupSensors();
 
   // OLED display setup
   if(!oledDisplay.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) 
@@ -143,12 +190,16 @@ void setup()
     #endif
     oledString[0] = "LITTLEFS Mount Failed";
     RefreshOLED(1);
+    SetupSensors();   // default SX1509 addresses
     return;
   }
 
   // load login credentials and other wifi/mqtt info
   // creates homepage with credential info
   LoadCredentials();
+
+  // after LoadCredentials() so the SX1509 addresses from the setup page are used
+  SetupSensors();
 
   if(strlen(mqtt_server.c_str()) == 0)
   {
@@ -189,6 +240,11 @@ void setup()
     Serial.printf("WiFi Setup user %s password %s host %s\n",WIFI_SSID.c_str(), WIFI_PASSWORD.c_str(), WIFI_HOSTNAME.c_str());
   #endif
   // Initialize WiFi
+  char randomStr[20];
+  sprintf(randomStr, "%c%c%c%c", (char)random(65, 90), (char)random(65, 90), (char)random(65, 90), (char)random(65, 90)); 
+ 
+  sprintf(tmpStr, "%s %s", WIFI_HOSTNAME.c_str(), randomStr);
+  WIFI_HOSTNAME = tmpStr;
   connectMode = NOT_CONNECTED;
   WiFi.hostname(WIFI_HOSTNAME);
   #ifdef DEBUG_VERBOSE
@@ -208,8 +264,6 @@ void setup()
   // set up MQTT if in STATION mode
   randomSeed(esp_random());   // hardware RNG; analogRead(0) is ADC2, unusable while WiFi is on
   char tmpStr[20];
-  char randomStr[20];
-  sprintf(randomStr, "%c%c%c%c", (char)random(65, 90), (char)random(65, 90), (char)random(65, 90), (char)random(65, 90)); 
   sprintf(tmpStr, "%s%s", mqttClientID.c_str(), randomStr);
   mqttClientID = tmpStr;
   mqttDeviceName = tmpStr;
@@ -353,7 +407,9 @@ void WiFi_Setup()
     {
       if(WiFi.softAPgetStationNum() == 0)
       {
-        Serial.println("[WiFi] AP mode timeout with no clients - restart to retry WiFi");
+        #ifdef DEBUG_VERBOSE
+          Serial.println("[WiFi] AP mode timeout with no clients - restart to retry WiFi");
+        #endif
         oledString[0] = "Retry WiFi...";
         RefreshOLED(1);
         ESP.restart();
@@ -401,7 +457,9 @@ void WiFi_Setup()
   {
     if(millis() - startMillis > WIFI_CONNECT_TIMEOUT_MS)
     {
-      Serial.println("[WiFi] Station mode connection failed - fall back to AP mode...");
+      #ifdef DEBUG_VERBOSE
+        Serial.println("[WiFi] Station mode connection failed - fall back to AP mode...");
+      #endif
       StartAP();
       return;
     }
@@ -439,10 +497,12 @@ void StartAP()
   // answer every DNS lookup with our address so the setup page opens automatically
   dnsServer.start(DNS_PORT, "*", apIP);
   wifiIP = WiFi.softAPIP();
-  Serial.print("[WiFi] AP mode, connect to ");
-  Serial.print(WIFI_HOSTNAME);
-  Serial.print(" and go to http://");
-  Serial.println(wifiIP);
+  #ifdef DEBUG_VERBOSE
+    Serial.print("[WiFi] AP mode, connect to ");
+    Serial.print(WIFI_HOSTNAME);
+    Serial.print(" and go to http://");
+    Serial.println(wifiIP);
+  #endif
 
   sprintf(tmpStr, "WiFi %s", WIFI_HOSTNAME.c_str());
   oledString[0] = tmpStr;
@@ -515,20 +575,24 @@ bool MQTT_Setup()
     sprintf(tmpStr, "No MQTT (%d) %s", mqttConnectAttempts, reason);
     oledString[1] = tmpStr;
     RefreshOLED(1);
-    Serial.printf("[MQTT] %s:%d as %s, user '%s' (password %d chars): state %d %s\n",
-                  mqtt_server.c_str(), mqtt_port, mqttClientID.c_str(), mqtt_user.c_str(),
-                  mqtt_password.length(), mqttState, reason);
-    Serial.printf("[MQTT] WiFi '%s' status %d (3 = connected), IP %s, mask %s, gateway %s, RSSI %d, MAC %s, DHCP hostname '%s' (setting '%s')\n",
-                  WiFi.SSID().c_str(), WiFi.status(), WiFi.localIP().toString().c_str(), WiFi.subnetMask().toString().c_str(),
-                  WiFi.gatewayIP().toString().c_str(), WiFi.RSSI(), WiFi.macAddress().c_str(),
-                  WiFi.getHostname(), WIFI_HOSTNAME.c_str());
+    #ifdef DEBUG_VERBOSE
+      Serial.printf("[MQTT] %s:%d as %s, user '%s' (password %d chars): state %d %s\n",
+                    mqtt_server.c_str(), mqtt_port, mqttClientID.c_str(), mqtt_user.c_str(),
+                    mqtt_password.length(), mqttState, reason);
+      Serial.printf("[MQTT] WiFi '%s' status %d (3 = connected), IP %s, mask %s, gateway %s, RSSI %d, MAC %s, DHCP hostname '%s' (setting '%s')\n",
+                    WiFi.SSID().c_str(), WiFi.status(), WiFi.localIP().toString().c_str(), WiFi.subnetMask().toString().c_str(),
+                    WiFi.gatewayIP().toString().c_str(), WiFi.RSSI(), WiFi.macAddress().c_str(),
+                    WiFi.getHostname(), WIFI_HOSTNAME.c_str());
+    #endif
     mqtt_connected = false;
     // can't reach the broker (wrong server/user/password, or broker down) - fall back to
     // AP mode so the settings can be checked on the setup page. With saved WiFi credentials
     // the AP mode retry (AP_RETRY_MS) reboots later to try again
     if(millis() - mqttFailStartMillis > MQTT_FAIL_TIMEOUT_MS)
     {
-      Serial.printf("[MQTT] no connection after %d attempts - fall back to AP mode...\n", mqttConnectAttempts);
+      #ifdef DEBUG_VERBOSE
+        Serial.printf("[MQTT] no connection after %d attempts - fall back to AP mode...\n", mqttConnectAttempts);
+      #endif
       MQTT_client.disconnect();
       mqttConnectAttempts = 0;
       mqttFailStartMillis = 0;
@@ -681,6 +745,16 @@ void LoadCredentials()
   }
   LoadSetting(mqtt_userPath, mqtt_user);
   LoadSetting(mqtt_passwordPath, mqtt_password);
+  if(LittleFS.exists(messageSegmentPath))
+  {
+    String segStr = LITTLEFS_ReadFile(LittleFS, messageSegmentPath);
+    segStr.trim();
+    messageSegment = constrain(segStr.toInt(), 0, MESSAGE_SEGMENTS - 1);
+  }
+  #ifdef DEBUG_VERBOSE
+    Serial.printf("Message segment: %d\n", messageSegment);
+  #endif
+  LoadSX1509Addresses();
   LITTLEFS_ReadFile(LittleFS, "/wifimanager.html");
   #ifdef DEBUG_EXTRA_VERBOSE
     Serial.print("SSID: ");
@@ -771,6 +845,42 @@ void WriteHTML()
   LITTLEFS_AppendFile(LittleFS, pagePath, tmpStr);
 
   LITTLEFS_AppendFile(LittleFS, pagePath, "			<hr/>");
+  LITTLEFS_AppendFile(LittleFS, pagePath, "			<div>Lights</div>");
+  sprintf(tmpStr, "			<label for=\"%s\">Message segment</label>", PARAM_MESSAGE_SEGMENT);
+  LITTLEFS_AppendFile(LittleFS, pagePath, tmpStr);
+  sprintf(tmpStr, "            <select id=\"%s\" name=\"%s\">", PARAM_MESSAGE_SEGMENT, PARAM_MESSAGE_SEGMENT);
+  LITTLEFS_AppendFile(LittleFS, pagePath, tmpStr);
+  {
+    const char *segmentNames[MESSAGE_SEGMENTS] = {"first", "second", "third"};
+    for(int segIdx = 0; segIdx < MESSAGE_SEGMENTS; segIdx++)
+    {
+      sprintf(tmpStr, "              <option value=\"%d\"%s>%d - %s 16 bits</option>",
+              segIdx, (segIdx == messageSegment) ? " selected" : "", segIdx, segmentNames[segIdx]);
+      LITTLEFS_AppendFile(LittleFS, pagePath, tmpStr);
+    }
+  }
+  LITTLEFS_AppendFile(LittleFS, pagePath, "            </select><br>");
+  for(int brdIdx = 0; brdIdx < ACTIVE_BOARDS; brdIdx++)
+  {
+    char paramName[24];
+    sprintf(paramName, PARAM_SX1509_ADDRESS_FMT, brdIdx);
+    sprintf(tmpStr, "			<label for=\"%s\">SX1509 #%d I2C address</label>", paramName, brdIdx + 1);
+    LITTLEFS_AppendFile(LittleFS, pagePath, tmpStr);
+    sprintf(tmpStr, "            <select id=\"%s\" name=\"%s\">", paramName, paramName);
+    LITTLEFS_AppendFile(LittleFS, pagePath, tmpStr);
+    for(int addrIdx = 0; addrIdx < SX1509_VALID_COUNT; addrIdx++)
+    {
+      sprintf(tmpStr, "              <option value=\"0x%02X\"%s>0x%02X</option>",
+              SX1509_VALID_ADDRESS[addrIdx],
+              (SX1509_VALID_ADDRESS[addrIdx] == SX1509_ADDRESS[brdIdx]) ? " selected" : "",
+              SX1509_VALID_ADDRESS[addrIdx]);
+      LITTLEFS_AppendFile(LittleFS, pagePath, tmpStr);
+    }
+    sprintf(tmpStr, "            </select>%s<br>", sx1509Ok[brdIdx] ? "" : " (not responding)");
+    LITTLEFS_AppendFile(LittleFS, pagePath, tmpStr);
+  }
+
+  LITTLEFS_AppendFile(LittleFS, pagePath, "			<hr/>");
   LITTLEFS_AppendFile(LittleFS, pagePath, "			<div>Time zone and DST offsets (hours)</div>");
   LITTLEFS_AppendFile(LittleFS, pagePath, "			<label for=\"tz\">Time Zone offset from GST</label>");
   sprintf(tmpStr, "            <input type=\"text\" id =\"timezone\" name=\"timezone\" value=\"%s\"><br>", tz.c_str());
@@ -853,6 +963,26 @@ void ApplyPendingSettings()
         mqtt_password = value;
       }
     }
+    else if (name == PARAM_MESSAGE_SEGMENT)
+    {
+      String segStr = value;
+      segStr.trim();
+      // blank keeps the current segment, anything else is limited to 0..MESSAGE_SEGMENTS-1
+      if(segStr.length())
+      {
+        messageSegment = constrain(segStr.toInt(), 0, MESSAGE_SEGMENTS - 1);
+      }
+    }
+    else if (name.startsWith("sx1509_addr"))
+    {
+      int brdIdx = name.substring(11).toInt();
+      byte address;
+      // invalid or out of range values keep the current address
+      if((brdIdx >= 0) && (brdIdx < ACTIVE_BOARDS) && ParseSX1509Address(value, address))
+      {
+        SX1509_ADDRESS[brdIdx] = address;
+      }
+    }
     #ifdef DEBUG_EXTRA_VERBOSE
       Serial.printf("%s %s\n", name.c_str(), value.c_str());
     #endif
@@ -876,6 +1006,9 @@ void SaveCredentials()
   LITTLEFS_WriteFile(LittleFS, mqtt_portPath, mqtt_portStr);
   LITTLEFS_WriteFile(LittleFS, mqtt_userPath, mqtt_user.c_str());
   LITTLEFS_WriteFile(LittleFS, mqtt_passwordPath, mqtt_password.c_str());
+  sprintf(tmpStr, "%d", messageSegment);
+  LITTLEFS_WriteFile(LittleFS, messageSegmentPath, tmpStr);
+  SaveSX1509Addresses();
   #ifdef DEBUG_EXTRA_VERBOSE
     Serial.print("SSID set to: ");
     Serial.println(WIFI_SSID);
@@ -898,12 +1031,13 @@ void SaveCredentials()
   #endif
   #ifdef DEBUG_VERBOSE
     // read back what was written so the serial log shows whether the save worked
-    Serial.printf("[Settings] saved - read back SSID '%s' host '%s' MQTT %s:%s user '%s'\n",
+    Serial.printf("[Settings] saved - read back SSID '%s' host '%s' MQTT %s:%s user '%s' segment '%s'\n",
                   LITTLEFS_ReadFile(LittleFS, ssidPath).c_str(),
                   LITTLEFS_ReadFile(LittleFS, clientPath).c_str(),
                   LITTLEFS_ReadFile(LittleFS, mqtt_serverPath).c_str(),
                   LITTLEFS_ReadFile(LittleFS, mqtt_portPath).c_str(),
-                  LITTLEFS_ReadFile(LittleFS, mqtt_userPath).c_str());
+                  LITTLEFS_ReadFile(LittleFS, mqtt_userPath).c_str(),
+                  LITTLEFS_ReadFile(LittleFS, messageSegmentPath).c_str());
   #endif
   LittleFS.end();
   delay(500);
@@ -1199,7 +1333,9 @@ void RefreshOLED(int fontSize)
 // ================================ begin ElegantOTA support functions ========================================
 void onOTAStart() {
   // Log when OTA has started
-  Serial.println("OTA update started!");
+  #ifdef DEBUG_VERBOSE
+    Serial.println("OTA update started!");
+  #endif
   // stay awake for the upload
   LowPower_Hold();
   // <Add your own code here>
@@ -1211,7 +1347,9 @@ void onOTAProgress(size_t current, size_t final) {
   // Log every 1 second
   if (millis() - ota_progress_millis > 1000) {
     ota_progress_millis = millis();
-    Serial.printf("OTA Progress Current: %u bytes, Final: %u bytes\n", current, final);
+    #ifdef DEBUG_VERBOSE
+      Serial.printf("OTA Progress Current: %u bytes, Final: %u bytes\n", current, final);
+    #endif
   }
 }
 //
@@ -1219,11 +1357,13 @@ void onOTAProgress(size_t current, size_t final) {
 //
 void onOTAEnd(bool success) {
   // Log when OTA has finished
-  if (success) {
-    Serial.println("OTA update finished successfully!");
-  } else {
-    Serial.println("There was an error during OTA update!");
-  }
+  #ifdef DEBUG_VERBOSE
+    if (success) {
+      Serial.println("OTA update finished successfully!");
+    } else {
+      Serial.println("There was an error during OTA update!");
+    }
+  #endif
   LowPower_Release();
   // <Add your own code here>
 }
@@ -1246,7 +1386,9 @@ void LowPower_Setup()
     esp_err_t err = esp_pm_configure(&pmConfig);
     if(err != ESP_OK)
     {
-      Serial.printf("[Power] light sleep not available (%s)\n", esp_err_to_name(err));
+      #ifdef DEBUG_VERBOSE
+        Serial.printf("[Power] light sleep not available (%s)\n", esp_err_to_name(err));
+      #endif
     }
     // holding the APB at full speed also blocks light sleep - PWM and OTA need both
     esp_pm_lock_create(ESP_PM_APB_FREQ_MAX, 0, "awake", &awakeLock);
@@ -1297,23 +1439,53 @@ void SetupSensors()
   #endif
   // pinMode() etc for the device's sensors and outputs
    Wire.begin();
+  #ifdef DEBUG_VERBOSE
+    // list everything on the I2C bus - shows the SX1509 address(es) actually present
+    Serial.print("I2C scan:");
+    int found = 0;
+    for(byte addr = 0x08; addr < 0x78; addr++)
+    {
+      Wire.beginTransmission(addr);
+      byte err = Wire.endTransmission();
+      if(err == 0)
+      {
+        Serial.printf(" 0x%02X", addr);
+        found++;
+      }
+      else if(err != 2)   // 2 = no ACK (nothing there), anything else is a bus problem
+      {
+        Serial.printf(" [0x%02X err %d]", addr, err);
+      }
+    }
+    Serial.printf("  (%d found)\n", found);
+  #endif
   // Call io.begin(<address>) to initialize the SX1509. If it
   // successfully communicates, it'll return 1.
+  bool allOk = true;
   for(int brdIdx = 0; brdIdx < ACTIVE_BOARDS; brdIdx++)
   {
-    if (io[brdIdx].begin(SX1509_ADDRESS[brdIdx]) == false)
+    sx1509Ok[brdIdx] = io[brdIdx].begin(SX1509_ADDRESS[brdIdx]);
+    if (!sx1509Ok[brdIdx])
     {
-      sprintf(tmpStr, "Failed to communicate with SX1509 at address 0x%X.", SX1509_ADDRESS[brdIdx]);
-      Serial.println(tmpStr);
-      while (1)
-        ; // If we fail to communicate, loop forever.
+      // don't hang here - the address is set from the setup page, so WiFi and the
+      // setup page have to keep running to be able to fix a wrong one
+      #ifdef DEBUG_VERBOSE
+        Serial.printf("Failed to communicate with SX1509 at address 0x%X.\n", SX1509_ADDRESS[brdIdx]);
+      #endif
+      sprintf(tmpStr, "SX1509 0x%X failed", SX1509_ADDRESS[brdIdx]);
+      oledString[0] = tmpStr;
+      RefreshOLED(1);
+      allOk = false;
+      continue;
     }
-    sprintf(tmpStr, "Initializing output pins for SX1509 at address 0x%X.", SX1509_ADDRESS[brdIdx]);
-    Serial.println(tmpStr);
+    #ifdef DEBUG_VERBOSE
+      Serial.printf("Initializing output pins for SX1509 at address 0x%X.\n", SX1509_ADDRESS[brdIdx]);
+    #endif
     for(int pinIdx = 0; pinIdx < DEFINED_OUTPUTS; pinIdx++)
     {
-      sprintf(tmpStr, "\tInitializing pin %d", pinIdx);
-      Serial.println(tmpStr);
+      #ifdef DEBUG_VERBOSE
+        Serial.printf("\tInitializing pin %d\n", pinIdx);
+      #endif
       io[brdIdx].pinMode(SX1509_LED_PIN[brdIdx][pinIdx], OUTPUT);
       io[brdIdx].digitalWrite(SX1509_LED_PIN[brdIdx][pinIdx], LOW);
       delay(100);
@@ -1321,7 +1493,67 @@ void SetupSensors()
     }
     
   }
-  Serial.println("SX1509 communication OK!");
+  #ifdef DEBUG_VERBOSE
+    if(allOk)
+    {
+      Serial.println("SX1509 communication OK!");
+    }
+  #endif
+  (void)allOk;   // only read by the debug output
+  // page was written by LoadCredentials() before the boards were checked - rewrite it with their status
+  WriteHTML();
+}
+//
+// SX1509 address from the setup page or a saved file - accepts "0x3E" or "62",
+// only addresses the SX1509 ADDR jumpers can select
+//
+bool ParseSX1509Address(String value, byte &address)
+{
+  value.trim();
+  if(value.length() == 0)
+  {
+    return false;
+  }
+  long parsed = strtol(value.c_str(), NULL, 0);
+  for(int addrIdx = 0; addrIdx < SX1509_VALID_COUNT; addrIdx++)
+  {
+    if(parsed == SX1509_VALID_ADDRESS[addrIdx])
+    {
+      address = (byte)parsed;
+      return true;
+    }
+  }
+  return false;
+}
+void LoadSX1509Addresses()
+{
+  char path[24];
+  for(int brdIdx = 0; brdIdx < ACTIVE_BOARDS; brdIdx++)
+  {
+    sprintf(path, sx1509AddressPathFmt, brdIdx);
+    if(LittleFS.exists(path))
+    {
+      byte address;
+      if(ParseSX1509Address(LITTLEFS_ReadFile(LittleFS, path), address))
+      {
+        SX1509_ADDRESS[brdIdx] = address;
+      }
+    }
+    #ifdef DEBUG_VERBOSE
+      Serial.printf("SX1509 #%d address: 0x%X\n", brdIdx + 1, SX1509_ADDRESS[brdIdx]);
+    #endif
+  }
+}
+void SaveSX1509Addresses()
+{
+  char path[24];
+  char addrStr[8];
+  for(int brdIdx = 0; brdIdx < ACTIVE_BOARDS; brdIdx++)
+  {
+    sprintf(path, sx1509AddressPathFmt, brdIdx);
+    sprintf(addrStr, "0x%02X", SX1509_ADDRESS[brdIdx]);
+    LITTLEFS_WriteFile(LittleFS, path, addrStr);
+  }
 }
 //
 // read sensors - fill in published_payload[] and return true if anything changed

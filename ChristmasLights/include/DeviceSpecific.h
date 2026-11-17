@@ -47,6 +47,9 @@ String mqtt_user = SECRET_MQTT_USER;
 String mqtt_password = SECRET_MQTT_PASSWORD;
 // command is for all devices, this specifies which part of the message this device uses - the rest is ignored
 int messageSegment = 0;  // 0 = first 16 bits, 1 = second 16 bits, 2 = third 16 bits
+#define MESSAGE_SEGMENTS 3
+#define messageSegmentPath "/msgSeg.txt"      // saved from the setup page
+#define PARAM_MESSAGE_SEGMENT "msg_segment"   // setup page field name
 
 // ----- device specific pubsub topics
 // subscribed (listening) topic(s)
@@ -65,7 +68,13 @@ String published_topic[MAX_PUBLISH] = { "MQTTXMAS/LastUpdate",
 #define DEFINED_BOARDS 2
 #define DEFINED_OUTPUTS 16
  SX1509 io[DEFINED_BOARDS];                                  // Create an SX1509 objects
-const byte SX1509_ADDRESS[DEFINED_BOARDS] = {0x3E, 0x3F};   // SX1509 I2C addresses
+byte SX1509_ADDRESS[DEFINED_BOARDS] = {0x3E, 0x3F};         // SX1509 I2C addresses - defaults, can be changed on the setup page
+bool sx1509Ok[DEFINED_BOARDS] = {false, false};              // board answered at its address in SetupSensors()
+#define SX1509_REG_DATA_B 0x10   // RegDataB (pins 15-8), RegDataA (pins 7-0) follows at 0x11 - UpdateLights() writes both at once
+#define SX1509_VALID_COUNT 4
+const byte SX1509_VALID_ADDRESS[SX1509_VALID_COUNT] = {0x3E, 0x3F, 0x70, 0x71}; // set by the ADDR jumpers
+#define sx1509AddressPathFmt "/sxAddr%d.txt"   // saved from the setup page, one file per board
+#define PARAM_SX1509_ADDRESS_FMT "sx1509_addr%d" // setup page field name, one per board
 const byte SX1509_LED_PIN[DEFINED_BOARDS][DEFINED_OUTPUTS] = {           // pin indexes
     {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}, // SX1509 #1 pins
     {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15} // SX1509 #2 pins
