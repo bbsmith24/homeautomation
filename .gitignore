@@ -9,6 +9,7 @@
 !/SlidingDoorLock/
 !/MQTT_Minimal/
 !/ChristmasLights/
+!/LightDriverMQTT/
 
 # local credentials (each project's include/secrets.h - see include/secrets.example.h)
 secrets.h

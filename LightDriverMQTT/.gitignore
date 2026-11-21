@@ -1,0 +1,9 @@
+# Visual Studio / .NET build output and per-user files
+.vs/
+bin/
+obj/
+*.user
+*.suo
+
+# local MQTT credentials - copy LightDriverMQTT/Secrets.example.cs
+Secrets.cs
