@@ -35,14 +35,15 @@
             timer1 = new System.Windows.Forms.Timer(components);
             numericUpDown1 = new NumericUpDown();
             label1 = new Label();
+            textBox1 = new TextBox();
             ((System.ComponentModel.ISupportInitialize)numericUpDown1).BeginInit();
             SuspendLayout();
             // 
             // button1
             // 
-            button1.Location = new Point(130, 12);
+            button1.Location = new Point(12, 96);
             button1.Name = "button1";
-            button1.Size = new Size(112, 34);
+            button1.Size = new Size(140, 34);
             button1.TabIndex = 0;
             button1.Text = "Publish";
             button1.UseVisualStyleBackColor = true;
@@ -52,20 +53,20 @@
             // 
             button2.Location = new Point(12, 12);
             button2.Name = "button2";
-            button2.Size = new Size(112, 34);
+            button2.Size = new Size(140, 34);
             button2.TabIndex = 1;
-            button2.Text = "Connect";
+            button2.Text = "Disconnected";
             button2.UseVisualStyleBackColor = true;
             button2.Click += button2_Click;
             // 
             // button3
             // 
             button3.BackColor = Color.Red;
-            button3.Location = new Point(248, 12);
+            button3.Location = new Point(173, 12);
             button3.Name = "button3";
-            button3.Size = new Size(112, 34);
+            button3.Size = new Size(140, 34);
             button3.TabIndex = 2;
-            button3.Text = "button3";
+            button3.Text = "Start Timer";
             button3.UseVisualStyleBackColor = false;
             button3.Click += button3_Click;
             // 
@@ -77,7 +78,7 @@
             // numericUpDown1
             // 
             numericUpDown1.Increment = new decimal(new int[] { 10, 0, 0, 0 });
-            numericUpDown1.Location = new Point(130, 52);
+            numericUpDown1.Location = new Point(392, 14);
             numericUpDown1.Maximum = new decimal(new int[] { 2500, 0, 0, 0 });
             numericUpDown1.Minimum = new decimal(new int[] { 100, 0, 0, 0 });
             numericUpDown1.Name = "numericUpDown1";
@@ -89,17 +90,28 @@
             // label1
             // 
             label1.AutoSize = true;
-            label1.Location = new Point(68, 54);
+            label1.Location = new Point(330, 17);
             label1.Name = "label1";
             label1.Size = new Size(56, 25);
             label1.TabIndex = 4;
             label1.Text = "Delay";
             // 
+            // textBox1
+            // 
+            textBox1.Font = new Font("Consolas", 10F);
+            textBox1.Location = new Point(158, 100);
+            textBox1.Name = "textBox1";
+            textBox1.Size = new Size(596, 31);
+            textBox1.TabIndex = 5;
+            textBox1.Text = "0000000000000000 0000000000000000 0000000000000000";
+            // 
             // Form1
             // 
+            AcceptButton = button1;
             AutoScaleDimensions = new SizeF(10F, 25F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(800, 450);
+            Controls.Add(textBox1);
             Controls.Add(label1);
             Controls.Add(numericUpDown1);
             Controls.Add(button3);
@@ -120,5 +132,6 @@
         private System.Windows.Forms.Timer timer1;
         private NumericUpDown numericUpDown1;
         private Label label1;
+        private TextBox textBox1;
     }
 }
